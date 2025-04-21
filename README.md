@@ -29,7 +29,7 @@ Hacked together really quick - making it public as now I use a stock ROM.
 2. Install the required Python libraries using uv:
    ```sh
    uv venv
-   uv pip install -r requirements.txt
+   uv pip install .
    ```
 
 3. Create a `.env` file in the project directory and add your GitHub personal access token:
