@@ -1,10 +1,10 @@
-import requests
 import hashlib
 import os
-
-from lxml import etree
 from pathlib import Path
+
+import requests
 from dotenv import load_dotenv
+from lxml import etree
 
 from check import keybox_check as CheckValid
 
@@ -33,7 +33,7 @@ cached_urls = set(open(cache_file, "r").readlines())
 
 
 # Function to fetch and print search results
-def fetch_and_process_results(page):
+def fetch_and_process_results(page: int) -> bool:
     params = {"per_page": 100, "page": page}
     response = session.get(search_url, headers=headers, params=params)
     if response.status_code != 200:
@@ -72,7 +72,7 @@ def fetch_and_process_results(page):
 
 
 # Function to fetch file content
-def fetch_file_content(url: str):
+def fetch_file_content(url: str) -> bytes:
     response = session.get(url)
     if response.status_code == 200:
         return response.content
@@ -82,16 +82,14 @@ def fetch_file_content(url: str):
 
 # Fetch all pages
 page = 1
-has_more = True
-while has_more:
-    has_more = fetch_and_process_results(page)
+while fetch_and_process_results(page):
     page += 1
 
 # update cache
 open(cache_file, "w").writelines(cached_urls)
 
 for file_path in save.glob("*.xml"):
-    file_content = file_path.read_text()  # Read file content as a string
+    file_content = file_path.read_bytes()  # Read file content as bytes
     # Run CheckValid to determine if the file is still valid
     if not CheckValid(file_content):
         # Prompt user for deletion
