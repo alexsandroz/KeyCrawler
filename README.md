@@ -14,7 +14,7 @@ Hacked together really quick - making it public as now I use a stock ROM.
 - Provides an interactive interface to manage invalid files.
 
 ## Requirements
-- Python 3.8+
+- Python 3.10+
 - [uv](https://github.com/astral-sh/uv)
 - A GitHub personal access token with permissions to search code repositories.
 
