@@ -6,14 +6,16 @@
 
 # Yep, completely stolen from @KimmyXYC. give them some love !
 
-import requests
+import re
+import time
+from datetime import datetime, timezone
+
 import lxml.etree as ET
-from datetime import datetime
+import requests
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, ec
-from datetime import datetime, timezone
+from cryptography.hazmat.primitives.asymmetric import ec, padding
 
 url = "https://android.googleapis.com/attestation/status"
 headers = {
@@ -21,33 +23,47 @@ headers = {
     "Pragma": "no-cache",
     "Expires": "0",
 }
-response = requests.get(url, headers=headers)
+
+params = {"ts": int(time.time())}
+
+response = requests.get(url, headers=headers, params=params)
 if response.status_code != 200:
     raise Exception(f"Error fetching data: {response.reason}")
 status_json = response.json()
 
 
-def parse_number_of_certificates(xml_file):
-    root = ET.fromstring(xml_file)
+def parse_number_of_certificates(xml_string):
+    root = ET.fromstring(xml_string)
+
     number_of_certificates = root.find(".//NumberOfCertificates")
 
-    if number_of_certificates is not None:
+    if number_of_certificates is not None and number_of_certificates.text is not None:
         count = int(number_of_certificates.text.strip())
         return count
     else:
         raise Exception("No NumberOfCertificates found.")
 
 
-def parse_certificates(xml_file, pem_number):
-    root = ET.fromstring(xml_file)
+def parse_certificates(xml_string, pem_number):
+    root = ET.fromstring(xml_string)
 
     pem_certificates = root.findall('.//Certificate[@format="pem"]')
 
     if pem_certificates is not None:
-        pem_contents = [cert.text.strip() for cert in pem_certificates[:pem_number]]
+        pem_contents = [cert.text.strip() if cert.text is not None else '' for cert in pem_certificates[:pem_number]]
         return pem_contents
     else:
         raise Exception("No Certificate found.")
+
+
+def parse_private_key(xml_string):
+    root = ET.fromstring(xml_string)
+
+    private_key = root.find(".//PrivateKey")
+    if private_key is not None and private_key.text is not None:
+        return private_key.text.strip()
+    else:
+        raise Exception("No PrivateKey found.")
 
 
 def load_public_key_from_file(file_path):
@@ -58,35 +74,52 @@ def load_public_key_from_file(file_path):
 
 def compare_keys(public_key1, public_key2):
     return public_key1.public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        encoding=serialization.Encoding.PEM, format=serialization.PublicFormat.SubjectPublicKeyInfo
     ) == public_key2.public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        encoding=serialization.Encoding.PEM, format=serialization.PublicFormat.SubjectPublicKeyInfo
     )
 
 
 def keybox_check(certificate_text):
     try:
-        # Assuming the certificate text contains PEM certificates
         pem_number = parse_number_of_certificates(certificate_text)
         pem_certificates = parse_certificates(certificate_text, pem_number)
+        private_key = parse_private_key(certificate_text)
     except Exception as e:
         print(f"[Keybox Check Error]: {e}")
         return False
 
     try:
         certificate = x509.load_pem_x509_certificate(pem_certificates[0].encode(), default_backend())
+        try:
+            private_key = re.sub(re.compile(r"^\s+", re.MULTILINE), "", private_key)
+            private_key = serialization.load_pem_private_key(
+                private_key.encode(), password=None, backend=default_backend()
+            )
+            check_private_key = True
+        except Exception:
+            check_private_key = False
     except Exception as e:
         print(f"[Keybox Check Error]: {e}")
         return False
 
     # Certificate Validity Verification
+    serial_number = certificate.serial_number
+    serial_number_string = hex(serial_number)[2:].lower()
     not_valid_before = certificate.not_valid_before_utc
     not_valid_after = certificate.not_valid_after_utc
     current_time = datetime.now(timezone.utc)
     is_valid = not_valid_before <= current_time <= not_valid_after
     if not is_valid:
+        return False
+
+    # Private Key Verification
+    if check_private_key:
+        private_key_public_key = private_key.public_key()
+        certificate_public_key = certificate.public_key()
+        if not compare_keys(private_key_public_key, certificate_public_key):
+            return False
+    else:
         return False
 
     # Keychain Authentication
@@ -151,9 +184,19 @@ def keybox_check(certificate_text):
         print("Found a knox key !?")
     else:
         return False
-    serial_number_string = hex(certificate.serial_number)[2:].lower()
-    # Validation of certificate revocation
-    status = status_json["entries"].get(serial_number_string, None)
+
+    # Number of Certificates in Keychain
+    if pem_number >= 4:
+        return False
+
+    status = None
+    for i in range(pem_number):
+        certificate = x509.load_pem_x509_certificate(pem_certificates[i].encode(), default_backend())
+        serial_number = certificate.serial_number
+        serial_number_string = hex(serial_number)[2:].lower()
+        if status_json["entries"].get(serial_number_string, None):
+            status = status_json["entries"][serial_number_string]
+            break
     if status is not None:
         return False
 

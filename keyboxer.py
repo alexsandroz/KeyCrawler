@@ -6,7 +6,7 @@ import requests
 from dotenv import load_dotenv
 from lxml import etree
 
-from check import keybox_check as CheckValid
+from check import keybox_check
 
 session = requests.Session()
 
@@ -64,7 +64,7 @@ def fetch_and_process_results(page: int) -> bool:
                 # Hash the canonical XML
                 hash_value = hashlib.sha256(canonical_xml).hexdigest()
                 file_name_save = save / (hash_value + ".xml")
-                if not file_name_save.exists() and file_content and CheckValid(file_content):
+                if not file_name_save.exists() and file_content and keybox_check(file_content):
                     print(f"{raw_url} is new")
                     with open(file_name_save, "wb") as f:
                         f.write(file_content)
@@ -91,7 +91,7 @@ open(cache_file, "w").writelines(cached_urls)
 for file_path in save.glob("*.xml"):
     file_content = file_path.read_bytes()  # Read file content as bytes
     # Run CheckValid to determine if the file is still valid
-    if not CheckValid(file_content):
+    if not keybox_check(file_content):
         # Prompt user for deletion
         user_input = input(f"File '{file_path.name}' is no longer valid. Do you want to delete it? (y/N): ")
         if user_input.lower() == "y":
