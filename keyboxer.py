@@ -1,12 +1,11 @@
-import hashlib
 import os
-from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
 from lxml import etree
 
 from check import keybox_check
+from helpers import CACHE_FILE, SAVE_DIR, hash_xml_file
 
 session = requests.Session()
 
@@ -18,8 +17,8 @@ if not GITHUB_TOKEN:
     raise ValueError("GITHUB_TOKEN is not set in the .env file")
 
 # Search query
-search_query = "<AndroidAttestation>"
-search_url = f"https://api.github.com/search/code?q={search_query}"
+SEARCH_QUERY = "<AndroidAttestation>+-repo:pperez39/google-keys"
+SEARCH_URL = f"https://api.github.com/search/code?q={SEARCH_QUERY}"
 
 # Headers for the API request
 headers = {
@@ -27,17 +26,37 @@ headers = {
     "Accept": "application/vnd.github.v3+json",
 }
 
-save = Path(__file__).resolve().parent / "keys"
-cache_file = Path(__file__).resolve().parent / "cache.txt"
-cached_urls = set(open(cache_file, "r").readlines())
+cached_urls = set(open(CACHE_FILE, "r").readlines())
+
+
+class RateLimitError(Exception):
+    def __init__(self, message, resume_epoch):
+        from datetime import timezone
+
+        super().__init__(message)
+        self.resume_epoch = resume_epoch
+
+    def get_sleep_time(self):
+        from datetime import datetime, timezone
+
+        tz = timezone.utc
+        return abs(datetime.fromtimestamp(self.resume_epoch, tz=tz) - datetime.now(tz=tz)).total_seconds()
 
 
 # Function to fetch and print search results
 def fetch_and_process_results(page: int) -> bool:
     params = {"per_page": 100, "page": page}
-    response = session.get(search_url, headers=headers, params=params)
+    response = session.get(SEARCH_URL, headers=headers, params=params)
     if response.status_code != 200:
-        raise RuntimeError(f"Failed to retrieve search results: {response.status_code}")
+        print(f"Failed to retrieve search results: {response.status_code}")
+        # print(f"url: {search_url}, presponse headers: {response.headers}")
+        print(f"response: {response.text}")
+        if response.headers.get("X-RateLimit-Reset") and response.status_code == 403:
+            reset_time = response.headers["X-RateLimit-Reset"]
+            raise RateLimitError("Rate limit exceeded. Please try again later.", resume_epoch=int(reset_time))
+        else:
+            raise RuntimeError()
+
     search_results = response.json()
     if "items" in search_results:
         for item in search_results["items"]:
@@ -56,14 +75,10 @@ def fetch_and_process_results(page: int) -> bool:
                 file_content = fetch_file_content(raw_url)
                 # Parse the XML
                 try:
-                    root = etree.fromstring(file_content)
+                    file_name = hash_xml_file(file_content)
                 except etree.XMLSyntaxError:
                     continue
-                # Get the canonical form (C14N)
-                canonical_xml = etree.tostring(root, method="c14n")
-                # Hash the canonical XML
-                hash_value = hashlib.sha256(canonical_xml).hexdigest()
-                file_name_save = save / (hash_value + ".xml")
+                file_name_save = SAVE_DIR / file_name
                 if not file_name_save.exists() and file_content and keybox_check(file_content):
                     print(f"{raw_url} is new")
                     with open(file_name_save, "wb") as f:
@@ -82,23 +97,21 @@ def fetch_file_content(url: str) -> bytes:
 
 # Fetch all pages
 page = 1
-while fetch_and_process_results(page):
-    page += 1
+has_more_results = True
+while has_more_results:
+    try:
+        has_more_results = fetch_and_process_results(page)
+        page += 1
+    except RateLimitError as e:
+        print(f"Rate limit exceeded. Retrying after {e.get_sleep_time()}...")
+        import time
+
+        time.sleep(e.get_sleep_time())
+        print("Retrying...")
+    except RuntimeError as e:
+        print("Error during fetching results, saving cache and checking files")
+        break
+
 
 # update cache
-open(cache_file, "w").writelines(cached_urls)
-
-for file_path in save.glob("*.xml"):
-    file_content = file_path.read_bytes()  # Read file content as bytes
-    # Run CheckValid to determine if the file is still valid
-    if not keybox_check(file_content):
-        # Prompt user for deletion
-        user_input = input(f"File '{file_path.name}' is no longer valid. Do you want to delete it? (y/N): ")
-        if user_input.lower() == "y":
-            try:
-                file_path.unlink()  # Delete the file
-                print(f"Deleted file: {file_path.name}")
-            except OSError as e:
-                print(f"Error deleting file {file_path.name}: {e}")
-        else:
-            print(f"Kept file: {file_path.name}")
+open(CACHE_FILE, "w").writelines(cached_urls)
