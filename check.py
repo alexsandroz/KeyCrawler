@@ -17,6 +17,12 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding
 
+_SUPPRESSED_ERROR_KEYWORDS = ("Unable to load PEM file", "MalformedFraming")
+
+
+def _should_suppress_error(error: Exception) -> bool:
+    return any(keyword in str(error) for keyword in _SUPPRESSED_ERROR_KEYWORDS)
+
 url = "https://android.googleapis.com/attestation/status"
 headers = {
     "Cache-Control": "max-age=0, no-cache, no-store, must-revalidate",
@@ -86,7 +92,8 @@ def keybox_check(certificate_text):
         pem_certificates = parse_certificates(certificate_text, pem_number)
         private_key = parse_private_key(certificate_text)
     except Exception as e:
-        print(f"[Keybox Check Error]: {e}")
+        if not _should_suppress_error(e):
+            print(f"[Keybox Check Error]: {e}")
         return False
 
     try:
@@ -100,7 +107,8 @@ def keybox_check(certificate_text):
         except Exception:
             check_private_key = False
     except Exception as e:
-        print(f"[Keybox Check Error]: {e}")
+        if not _should_suppress_error(e):
+            print(f"[Keybox Check Error]: {e}")
         return False
 
     # Certificate Validity Verification
