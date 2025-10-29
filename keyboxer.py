@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -48,7 +49,7 @@ class ScrapeStats:
     added: int = 0
     cached: int = 0
     duplicates: int = 0
-
+    too_many_requests: int = 0
 
 def load_cached_urls() -> Set[str]:
     if not CACHE_FILE.exists():
@@ -65,11 +66,7 @@ def save_cached_urls(urls: Iterable[str]) -> None:
 
 
 def fetch_file_content(url: str) -> bytes:
-    response = SESSION.get(url)
-    if response.status_code == 200:
-        return response.content
-    raise RuntimeError(f"Failed to download {url}")
-
+    return SESSION.get(url)
 
 def process_item(item: dict, cached_urls: Set[str], stats: ScrapeStats, verbose: bool) -> None:
     file_name = item["name"]
@@ -77,13 +74,60 @@ def process_item(item: dict, cached_urls: Set[str], stats: ScrapeStats, verbose:
         return
 
     stats.searched += 1
-    raw_url = item["html_url"].replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
+    raw_url = item['html_url']
+
     if raw_url in cached_urls:
         stats.cached += 1
         return
 
+    response = fetch_file_content(raw_url)
+    if response.status_code != 200:
+        stats.too_many_requests += 1
+        log_error(f"{response.status_code}: {raw_url}: ")
+        return
+        
+    try:
+        # Attempt to parse the response as HTML and extract the JSON payload
+        html_content = response.text
+        root = etree.fromstring(html_content, etree.HTMLParser())
+        script_element = root.xpath('//script[@type="application/json" and @data-target="react-app.embeddedData"]')
+        
+        if script_element:
+            json_data = script_element[0].text
+            file_content_json = json.loads(json_data)
+            # Navigate to the rawLines within the JSON structure
+            if 'payload' in file_content_json and 'blob' in file_content_json['payload'] and 'rawLines' in file_content_json['payload']['blob']:
+                raw_text = "\n".join(file_content_json['payload']['blob']['rawLines'])
+                start_tag = "<AndroidAttestation>"
+                end_tag = "</AndroidAttestation>"
+                start_index = raw_text.find(start_tag)
+                end_index = raw_text.find(end_tag)
+
+                if start_index != -1 and end_index != -1:
+                    # Extract the block from <AndroidAttestation> to </AndroidAttestation> as a string
+                    end_index += len(end_tag)
+                    attestation_block = raw_text[start_index:end_index]
+                    # Prepend the XML declaration and then encode the final string to bytes
+                    xml_content = f'<?xml version="1.0"?>\n{attestation_block}'
+                    file_content = xml_content.encode('utf-8')
+                else:
+                    if verbose:
+                        log_error(f"Could not find <AndroidAttestation> block in {raw_url}")
+                    stats.malformed += 1
+                    return
+            else:
+                stats.malformed += 1
+                if verbose:
+                    log_error(f"Could not find rawLines in JSON payload from {raw_url}")
+                return
+    except Exception as e:
+        stats.malformed += 1
+        if verbose:
+            log_error(f"Error parsing content from {raw_url}: {e}")
+        return
+
     cached_urls.add(raw_url)
-    file_content = fetch_file_content(raw_url)
+
     try:
         hashed_name = hash_xml_file(file_content)
     except etree.XMLSyntaxError:

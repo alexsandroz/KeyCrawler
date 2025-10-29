@@ -23,6 +23,7 @@ def main() -> None:
         "GitHub Search Summary",
         [
             ("Examined", str(scrape_stats.searched)),
+            ("Too Many Requests", str(scrape_stats.too_many_requests)),
             ("Added", str(scrape_stats.added)),
             ("Malformed", str(scrape_stats.malformed)),
             ("Duplicates", str(scrape_stats.duplicates)),
