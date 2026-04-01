@@ -28,13 +28,14 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 if not GITHUB_TOKEN:
     raise ValueError("GITHUB_TOKEN is not set in the .env file")
 
-SEARCH_QUERY = "<AndroidAttestation>+-repo:pperez39/google-keys"
+SEARCH_QUERY = "<AndroidAttestation> -repo:pperez39/google-keys <AndroidAttestation> -repo:MeowDump/Integrity-Box"
 SEARCH_URL = f"https://api.github.com/search/code?q={SEARCH_QUERY}"
 RESULTS_PER_PAGE = 100
 
 HEADERS = {
-    "Authorization": f"token {GITHUB_TOKEN}",
-    "Accept": "application/vnd.github.v3+json",
+    "Authorization": f"Bearer {GITHUB_TOKEN}",
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2026-03-10"
 }
 
 
